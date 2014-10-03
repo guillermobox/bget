@@ -2,18 +2,12 @@ import sys
 import hashlib
 import socket
 import array
-
-def parse_peers(string):
-    def strtoport(string):
-        import struct
-        return int(str(struct.unpack('!H', string)[0]))
-
-    peers = []
-    while len(string) != 0:
-        peer = string[0:6]
-        string = string[6:]
-        peers.append("%s:%d" % (socket.inet_ntoa(peer[0:4]), strtoport(peer[4:6])))
-    return peers
+import pprint
+import struct
+import time
+import collections
+import urllib
+import os
 
 def parse_list(string, offset):
     l = []
@@ -23,24 +17,10 @@ def parse_list(string, offset):
     return l, offset+1
 
 def parse_dictionary(string, offset):
-    d = {}
+    d = collections.OrderedDict()
     while string[offset] != 'e':
-        key, offset1 = parse_token(string, offset)
-        value, offset2 = parse_token(string, offset1)
-        offset = offset2
-        if key == 'info':
-            sha = hashlib.sha1(string[offset1:offset2])
-            enc = sha.digest()
-            print repr(enc)
-            ret = ''
-            for char in enc:
-                if char in '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-_~':
-                    ret += char
-                else:
-                    ret += '%' + '%02X'%ord(char)
-            print ret
-        elif key == 'peers':
-            value = parse_peers(value)
+        key, offset = parse_token(string, offset)
+        value, offset = parse_token(string, offset)
         d[key] = value
     return d, offset+1
 
@@ -57,10 +37,7 @@ def parse_data(string, offset):
         raise Exception()
     length = int(string[offset:offset+pos])
     data = string[offset+pos+1:offset+pos+1+length]
-    #if len(data) < 128:
     return data, offset+pos+1+length
-    #else:
-    #return 'data(%d)'%len(data), offset+pos+1+length
 
 def parse_token(string, offset):
     if string[offset] == 'd':
@@ -72,11 +49,70 @@ def parse_token(string, offset):
     else:
         return parse_data(string, offset)
 
-if len(sys.argv) > 1:
-    f = open(sys.argv[1])
-else:
-    f = sys.stdin
+def bencoder(item):
+    if type(item) in [collections.OrderedDict, dict]:
+        payload = 'd'
+        for key, value in item.iteritems():
+            payload += bencoder(key)
+            payload += bencoder(value)
+        payload += 'e'
+    elif type(item) == list:
+        payload = 'l'
+        for it in item:
+            payload += bencoder(it)
+        payload += 'e'
+    elif type(item) == int:
+        payload = 'i'
+        payload += str(item)
+        payload += 'e'
+    elif type(item) == str:
+        payload = str(len(item))+":"+item
+    return payload
 
-import pprint
-pprint.pprint(parse_token(f.read(), 0)[0])
+def bdecoder(string):
+    return parse_token(string, 0)[0]
+
+def parse_peers(string):
+    def strtoport(string):
+        return int(str(struct.unpack('!H', string)[0]))
+    peers = []
+    while len(string) != 0:
+        peer = string[0:6]
+        string = string[6:]
+        peers.append("%s:%d" % (socket.inet_ntoa(peer[0:4]), strtoport(peer[4:6])))
+    return peers
+
+def read_tracker(url, infohash, clientid):
+    f = urllib.urlopen(url + '?info_hash=' + urllib.quote(infohash) + '&port=6881')
+    data = f.read()
+    f.close()
+    return bdecoder(data)
+
+def get_peer_list(tracker):
+    return parse_peers(tracker['peers'])
+    
+def download_file(peerlist, infohash, clientid):
+    return 0
+
+if len(sys.argv) <= 1:
+    print 'Provide a file name to download'
+    exit(1)
+
+f = open(sys.argv[1])
+torrent = bdecoder(f.read())
 f.close()
+
+infohash = hashlib.sha1(bencoder(torrent['info'])).digest()
+
+clientid = os.urandom(20)
+
+print 'Creation date:', time.asctime(time.gmtime(int(torrent['creation date'])))
+print 'Announce:', torrent['announce']
+print 'Client id: 0x' + ''.join(map(lambda b: '%02X'%(ord(b),), clientid))
+print 'Hash info: 0x' + ''.join(map(lambda b: '%02X'%(ord(b),), infohash))
+
+tracker = read_tracker(torrent['announce'], infohash, clientid)
+peers = get_peer_list(tracker)
+print sorted(peers)
+
+download_file(peers, infohash, clientid)
