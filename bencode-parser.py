@@ -5,8 +5,8 @@ import array
 
 def parse_peers(string):
     def strtoport(string):
-        a = array.array('B', string)
-        return a[0] + (a[1] * 0xFF)
+        import struct
+        return int(str(struct.unpack('!H', string)[0]))
 
     peers = []
     while len(string) != 0:
@@ -31,6 +31,7 @@ def parse_dictionary(string, offset):
         if key == 'info':
             sha = hashlib.sha1(string[offset1:offset2])
             enc = sha.digest()
+            print repr(enc)
             ret = ''
             for char in enc:
                 if char in '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-_~':
