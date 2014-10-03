@@ -1,0 +1,10 @@
+lbt
+===
+
+Lightweight BitTorrent Client
+-----------------------------
+
+Just a lightweight BitTorrent client, wrote to learn about the protocol and to
+download/seed contents from bt in cloud machines or just machines in which you
+don't want to install a full bt client. But mostly to learn about the protocol.
+
