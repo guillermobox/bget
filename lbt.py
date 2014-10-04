@@ -94,7 +94,7 @@ def parse_peers(string):
     return peers
 
 def read_tracker(url, infohash, clientid, size):
-    url = url + '?info_hash=' + urllib.quote(infohash) + '&peer_id=' + urllib.quote(clientid) +'&port=6881' + '&event=started' + '&uploaded=0' + '&downloaded=0' + '&left=' + str(size)
+    url = url + '?info_hash=' + urllib.quote(infohash) + '&peer_id=' + urllib.quote(clientid) +'&port=6881' + '&event=started' + '&uploaded=0' + '&downloaded=0' + '&left=' + str(size) + '&compact=1'
     print '  Downloading url:', url
     f = urllib.urlopen(url)
     data = f.read()
@@ -133,16 +133,23 @@ def download_file(peerlist, infohash, clientid):
     peer = random.choice(peerlist)
     print 'Using peer: %s:%d'%(peer['ip'], peer['port'])
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect((peer['ip'], peer['port']))
+    try:
+        s.connect((peer['ip'], peer['port']))
+    except:
+        print 'Wops! Connection refused!'
+        exit(1)
     s.send(handshake(infohash, clientid))
     hand = s.recv(68)
+    if hand == '':
+        print 'Handshake not returned! How rude!'
+        exit(1)
     print 'Handshake!', repr(hand)
     s.send(create_message(MSG_INTERESTED))
     while True:
         data = s.recv(4)
         if data=='':
-            print 'Empty data, continuing...'
-            continue
+            print 'Connection broken! Exiting'
+            exit(1)
         length = struct.unpack('!I', data)[0]
         print 'Received length:', length
         if length == 0:
@@ -220,5 +227,5 @@ if not tracker:
 peers = get_peer_list(tracker)
 
 #download_file([dict(ip='173.71.156.250', port=7002)], infohash, clientid)
-download_file([dict(ip='2.125.107.224', port=51413)], infohash, clientid)
-#download_file(peers, infohash, clientid)
+#download_file([dict(ip='2.125.107.224', port=51413)], infohash, clientid)
+download_file(peers, infohash, clientid)
