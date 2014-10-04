@@ -121,11 +121,14 @@ def handshake(infohash, clientid):
 def create_message(msgtype, **kwargs):
     msg = '' + msgtype
     if msgtype == MSG_REQUEST:
-        msg += struct.pack('!III', 0, 0, 16384) #16384, 32768
+        msg += struct.pack('!III', 0, kwargs['begin'], 16384) #16384, 32768
     length = len(msg)
     return struct.pack('!I', length) + msg
 
-def download_file(peerlist, infohash, clientid):
+def download_file(peerlist, infohash, clientid, torrent):
+    piece = ''
+    blockid = 0
+    blockammount = 16
     peer_choked = 1
     me_interested = 0
 
@@ -165,21 +168,34 @@ def download_file(peerlist, infohash, clientid):
             print 'Sending interested'
             s.send(create_message(MSG_INTERESTED))
             print 'Sending request'
-            s.send(create_message(MSG_REQUEST))
+            s.send(create_message(MSG_REQUEST, begin=blockid))
         elif msgtype == MSG_PIECE:
-            print 'RECEVING A PIECE!'
-            s.recv(8)
+            print 'Receiving a block'
+            data = s.recv(8)
+            index, begin = struct.unpack('!II', data)
+            print 'Piece index = %d, block offset = %d\n'%(index, begin)
             length -= 8
             data = ''
             while length:
                 input = s.recv(2048)
                 length -= len(input)
-                print 'Read %d bytes, %d up to go'%(len(input), length)
+                #print 'Read %d bytes, %d up to go'%(len(input), length)
                 data += input
-            f = open('/tmp/test.bin', 'wb')
-            f.write(data)
-            f.close()
+            piece += data
             print 'Block finished!'
+            blockid += 1
+            if blockid == 16:
+                f = open('/tmp/test.bin', 'wb')
+                f.write(data)
+                f.close()
+                print 'Piece finished! is in /tmp/test.bin'
+                sha1 = hashlib.sha1(piece).digest()
+                print 'Sha1:', hashtostr(sha1)
+                print 'Expected:', hashtostr(torrent['info']['pieces'][0:20])
+                exit(0)
+            else:
+                print 'Sending request for next block'
+                s.send(create_message(MSG_REQUEST, begin=blockid))
         else:
             more = s.recv(length)
 
@@ -228,4 +244,4 @@ peers = get_peer_list(tracker)
 
 #download_file([dict(ip='173.71.156.250', port=7002)], infohash, clientid)
 #download_file([dict(ip='2.125.107.224', port=51413)], infohash, clientid)
-download_file(peers, infohash, clientid)
+download_file(peers, infohash, clientid, torrent)
