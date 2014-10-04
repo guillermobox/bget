@@ -121,7 +121,7 @@ def handshake(infohash, clientid):
 def create_message(msgtype, **kwargs):
     msg = '' + msgtype
     if msgtype == MSG_REQUEST:
-        msg += struct.pack('!III', 0, kwargs['begin'], 16384) #16384, 32768
+        msg += struct.pack('!III', 0, kwargs['begin']*16384, 16384) #16384, 32768
     length = len(msg)
     return struct.pack('!I', length) + msg
 
@@ -186,7 +186,7 @@ def download_file(peerlist, infohash, clientid, torrent):
             blockid += 1
             if blockid == 16:
                 f = open('/tmp/test.bin', 'wb')
-                f.write(data)
+                f.write(piece)
                 f.close()
                 print 'Piece finished! is in /tmp/test.bin'
                 sha1 = hashlib.sha1(piece).digest()
