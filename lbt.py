@@ -1,5 +1,6 @@
 import sys
 import hashlib
+import math
 import socket
 import array
 import pprint
@@ -9,6 +10,7 @@ import collections
 import urllib
 import os
 import random
+import threading
 
 MSG_CHOKE = '\x00'
 MSG_UNCHOKE = '\x01'
@@ -19,6 +21,16 @@ MSG_BITFIELD = '\x05'
 MSG_REQUEST = '\x06'
 MSG_PIECE = '\x07'
 MSG_CANCEL = '\x08'
+
+available_peers = set()
+invalid_peers = set()
+using_peers = set()
+total_bytes = 0
+downloaded_bytes = 0
+download_rate = 0
+peers = []
+peer_connections = {}
+peer_states = {}
 
 def parse_list(string, offset):
     l = []
@@ -95,7 +107,7 @@ def parse_peers(string):
 
 def read_tracker(url, infohash, clientid, size):
     url = url + '?info_hash=' + urllib.quote(infohash) + '&peer_id=' + urllib.quote(clientid) +'&port=6881' + '&event=started' + '&uploaded=0' + '&downloaded=0' + '&left=' + str(size) + '&compact=1'
-    print '  Downloading url:', url
+    #print '  Downloading url:', url
     f = urllib.urlopen(url)
     data = f.read()
     f.close()
@@ -106,8 +118,10 @@ def read_tracker(url, infohash, clientid, size):
         print '\033[1;1m' + data + '\033[0m'
         return None
 
-def get_peer_list(tracker):
-    return parse_peers(tracker['peers'])
+def update_peer_list(tracker):
+    peers.extend(parse_peers(tracker['peers']))
+    #peers = set(parse_peers(tracker['peers']))
+    #available_peers.add(peers - invalid_peers)
 
 def handshake(infohash, clientid):
     ret = ''
@@ -125,76 +139,67 @@ def create_message(msgtype, **kwargs):
     length = len(msg)
     return struct.pack('!I', length) + msg
 
-def download_file(peerlist, infohash, clientid, torrent):
+def download_file(peerlist, infohash, clientid, torrent, tid):
+    global downloaded_bytes
     piece = ''
     blockid = 0
     blockammount = 16
     peer_choked = 1
     me_interested = 0
 
-    print 'Using random peer'
     peer = random.choice(peerlist)
-    print 'Using peer: %s:%d'%(peer['ip'], peer['port'])
+    peer_connections[tid] = peer['ip'] + ':' + str(peer['port'])
+
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         s.connect((peer['ip'], peer['port']))
     except:
-        print 'Wops! Connection refused!'
         exit(1)
+    peer_states[tid] = 'Connected'
     s.send(handshake(infohash, clientid))
     hand = s.recv(68)
     if hand == '':
-        print 'Handshake not returned! How rude!'
+        peer_states[tid] = 'Handshake not returned!'
         exit(1)
-    print 'Handshake!', repr(hand)
+    peer_states[tid] = 'Handshaked'
     s.send(create_message(MSG_INTERESTED))
     while True:
         data = s.recv(4)
         if data=='':
-            print 'Connection broken! Exiting'
+            peer_states[tid] = 'Connection broken!'
             exit(1)
         length = struct.unpack('!I', data)[0]
-        print 'Received length:', length
         if length == 0:
-            print 'Keep-alive message! Everythings fine'
             continue
         msgtype = s.recv(1)
         length -= 1
-        print 'Received data:', repr(msgtype)
         if msgtype == MSG_UNCHOKE:
-            print 'Peer unchocked!'
-            print 'Sending unchocke'
+            peer_states[tid] = 'Unchoked peer'
             s.send(create_message(MSG_UNCHOKE))
-            print 'Sending interested'
             s.send(create_message(MSG_INTERESTED))
-            print 'Sending request'
             s.send(create_message(MSG_REQUEST, begin=blockid))
         elif msgtype == MSG_PIECE:
-            print 'Receiving a block'
+            peer_states[tid] = 'Receiving data'
             data = s.recv(8)
             index, begin = struct.unpack('!II', data)
-            print 'Piece index = %d, block offset = %d\n'%(index, begin)
             length -= 8
             data = ''
             while length:
                 input = s.recv(2048)
                 length -= len(input)
-                #print 'Read %d bytes, %d up to go'%(len(input), length)
+                downloaded_bytes += length
                 data += input
             piece += data
-            print 'Block finished!'
             blockid += 1
             if blockid == 16:
+                peer_states[tid] = 'Piece finished'
                 f = open('/tmp/test.bin', 'wb')
                 f.write(piece)
                 f.close()
-                print 'Piece finished! is in /tmp/test.bin'
                 sha1 = hashlib.sha1(piece).digest()
-                print 'Sha1:', hashtostr(sha1)
-                print 'Expected:', hashtostr(torrent['info']['pieces'][0:20])
+                peer_states[tid] = 'Sha success'
                 exit(0)
             else:
-                print 'Sending request for next block'
                 s.send(create_message(MSG_REQUEST, begin=blockid))
         else:
             more = s.recv(length)
@@ -202,7 +207,7 @@ def download_file(peerlist, infohash, clientid, torrent):
     return 0
 
 def hashtostr(hash):
-    return ''.join(map(lambda b: '%02X'%(ord(b),), hash))
+    return ''.join(map(lambda b: '%02x'%(ord(b),), hash))
 
 if len(sys.argv) <= 1:
     print 'Provide a file name to download'
@@ -236,12 +241,45 @@ if 'comment' in torrent:
 print '  Client id: 0x' + hashtostr(clientid)
 print '  Hash info: 0x' + hashtostr(infohash)
 
+pammount = len(torrent['info']['pieces']) / 20
+pieces = [0] * pammount
+total_bytes = total_length
 
-tracker = read_tracker(torrent['announce'], infohash, clientid, total_length)
-if not tracker:
-    exit(1)
-peers = get_peer_list(tracker)
+if False:
+    tracker = read_tracker(torrent['announce'], infohash, clientid, total_length)
+    if not tracker:
+        exit(1)
 
-#download_file([dict(ip='173.71.156.250', port=7002)], infohash, clientid)
-#download_file([dict(ip='2.125.107.224', port=51413)], infohash, clientid)
-download_file(peers, infohash, clientid, torrent)
+    print '  Updating peer list'
+    update_peer_list(tracker)
+    print '  %d peers found'%(len(peers),)
+    print
+
+    import pickle
+    f = open('/tmp/peers.pkl', 'w')
+    pickle.dump(peers, f)
+    f.close()
+else:
+    import pickle
+    print '  Loading peers from pickle file'
+    f = open('/tmp/peers.pkl', 'r')
+    peers = pickle.load(f)
+    f.close()
+
+peer_connections[0] = 'None'
+peer_states[0] = 'Not connected'
+th = threading.Thread(target=download_file, args=(peers, infohash, clientid, torrent, 0))
+th.start()
+
+def update_status():
+    percent = downloaded_bytes * 100.0 / total_bytes
+    downloaded_chars = int(math.floor(percent * 80 / 100))
+    left_chars = 80 - downloaded_chars
+    print '\033[3A',
+    print '\033[K %d] %s (%s)'%(0, peer_connections[0], peer_states[0])
+    print '\033[K  %09d/%09d bytes downloaded (%3.2f %%)'%(downloaded_bytes, total_bytes, percent), time.asctime(time.localtime(time.time()))
+    print '\033[K [' + '#' * downloaded_chars + ' ' * left_chars + ']'
+
+while True:
+    update_status()
+    time.sleep(1)
