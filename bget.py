@@ -1,7 +1,9 @@
+import math
 import os
 import random
 import struct
 import sys
+import time
 import threading
 
 import bencode
@@ -32,8 +34,7 @@ def get_freepiece(torrent):
             if torrent.pieces[i] == 0 :
                 torrent.pieces[i] = 1
                 return i
-        else:
-            return None
+        return None
 
 def update_peers(tracker):
     peers = tracker.peers()
@@ -41,40 +42,56 @@ def update_peers(tracker):
 
 def peer_thread(torrent, clientid, tid):
     BLOCKSIZE = 16384
-    peer = get_freepeer()
-    pc = bittorrent.PeerConnection(peer)
-    peer_connections[tid] = pc
-    pc.connect()
-    pc.handshake(torrent, clientid)
 
-    pc.send(bittorrent.MSG_INTERESTED)
+    def newpeer():
+        while True:
+            try:
+                peer = get_freepeer()
+                pc = bittorrent.PeerConnection(peer)
+                peer_connections[tid] = pc
+                pc.connect()
+                if pc.handshake(torrent, clientid) == False:
+                    continue
+                pc.send(bittorrent.MSG_INTERESTED)
+                break
+            except:
+                continue
+        return pc
+
+    pc = newpeer()
     piece_data = bytearray(int(torrent.data['info']['piece length']))
-    piece = get_freepiece(torrent)
+    pc.piece = get_freepiece(torrent)
     blocks = int(torrent.data['info']['piece length']) / BLOCKSIZE
     blockid = 0
 
     while True:
-        mtype, mdata = pc.receive()
-        print tid, 'Message:', ord(mtype)
+        try:
+            mtype, mdata = pc.receive()
+        except:
+            pc = newpeer()
+            continue
+
         if mtype == bittorrent.MSG_UNCHOKE:
-            print tid, 'Unchoke!'
-            pc.send(bittorrent.MSG_REQUEST, piece=piece, begin=blockid * BLOCKSIZE, length=BLOCKSIZE)
-            print tid, 'Requested', piece, blockid
+            pc.state = 'Ready to receive'
+            pc.send(bittorrent.MSG_REQUEST, piece=pc.piece, begin=blockid * BLOCKSIZE, length=BLOCKSIZE)
+        elif mtype == bittorrent.MSG_CHOKE:
+            pc.state = 'Chocked!'
         elif mtype == bittorrent.MSG_PIECE:
+            pc.state = 'Receiving data'
             index, begin = struct.unpack('!II', mdata[0:8])
             data = mdata[8:]
-            print tid, 'Received piece', index, begin
             piece_data[begin:begin+len(data)] = data
+            torrent.register(len(data))
             blockid += 1
             if blockid == blocks:
-                print tid, 'Finished with this piece!'
-                check = torrent.checkpiece(index, piece_data)
-                if check:
-                    print 'ALL OK!'
-                else:
-                    print 'WOPS!'
-                continue
-            pc.send(bittorrent.MSG_REQUEST, piece=piece, begin=blockid * BLOCKSIZE, length=BLOCKSIZE)
+                blockid = 0
+                if torrent.checkpiece(index, piece_data):
+                    torrent.writepiece(index, piece_data)
+                    pc.piece = get_freepiece(torrent)
+                    if pc.piece == None:
+                        pc.state = 'Idle, no pieces left'
+                        return
+            pc.send(bittorrent.MSG_REQUEST, piece=pc.piece, begin=blockid * BLOCKSIZE, length=BLOCKSIZE)
 
 def main():
     if len(sys.argv) <= 1:
@@ -99,30 +116,37 @@ def main():
         thread_list.append(th)
         th.start()
 
-    fmt = '{0:4} {1:5} {2:24} {3}'
+    fmt = '{0:<5} {1:24} {2:4} {3}'
 
     def update_status():
-        downloaded = sum(downloaded_bytes.values())
-        downloaded_pieces = len(filter(lambda x:x==2, pieces))
+        downloaded = torrent.downloaded_bytes
+        total_bytes = torrent.size
         percent = downloaded * 100.0 / total_bytes
         downloaded_chars = int(math.floor(percent * 80 / 100))
         left_chars = 80 - downloaded_chars
-        if verbose:
-            print '%9d/%09d bytes downloaded (%3.2f %%), %4d/%4d pieces, %d peers left'%(downloaded, total_bytes, percent, downloaded_pieces, total_pieces, len(peers))
-        else:
-            for i in range(threads):
-                print '\033[K' + fmt.format(i, peer_pieces[i], peer_connections[i], peer_states[i])
-            print '\033[K  %9d/%09d bytes downloaded (%3.2f %%), %4d/%4d pieces, %d peers left'%(downloaded, total_bytes, percent, downloaded_pieces, total_pieces, len(peers))
-            print '\033[K [' + '#' * downloaded_chars + ' ' * left_chars + ']'
-            sys.stdout.write('\033[' + str(threads + 2) + 'A')
+        for i in range(threads):
+            if i in peer_connections.keys():
+                if peer_connections[i].is_stalled():
+                    peer_connections[i].drop()
+                piece = peer_connections[i].piece
+                peer = '{0[0]}:{0[1]}'.format(peer_connections[i].peer)
+                dietime = int(peer_connections[i].timetodie)
+                state = peer_connections[i].state
+                print '\033[K' + fmt.format(piece, peer, dietime, state)
+            else:
+                print '\033[K' + '-'*40
 
-    if verbose==False:
-        print '\033[1;1m' + fmt.format('', 'Index', 'Connection', 'State') + '\033[0m'
+        print '\033[K  %6d/%06d KiB (%3.2f %%) @ %8.2f KiB/s, %4d/%4d pieces, %d peers'% (torrent.downloaded_bytes/1024, torrent.size/1024, percent, torrent.rate, torrent.downloaded_pieces, 888, len(peer_whitelist))
+        print '\033[K [' + '#' * downloaded_chars + '.' * left_chars + ']'
+        sys.stdout.write('\033[' + str(threads + 2) + 'A')
+
+    print '\033[1;1m' + fmt.format('Index', 'Connection', 'Die', 'State') + '\033[0m'
 
     sys.stdout.flush()
 
     while True:
         update_status()
+        time.sleep(1)
         if tracker.get(torrent, clientid):
             update_peers(tracker)
 

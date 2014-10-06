@@ -1,6 +1,7 @@
 import bencode
 import hashlib
 import os
+import select
 import socket
 import struct
 import time
@@ -24,6 +25,11 @@ class Torrent(object):
         self.me_interested = 1
         self.peer_chocked = 1
         self.peer_interested = 0
+        self.downloaded_bytes = 0
+        self.downloaded_pieces = 0
+        self.start_time = None
+        self.last_time = None
+        self.rate = 0
 
     def start(self):
         path = self.data['info']['name']
@@ -41,6 +47,17 @@ class Torrent(object):
             pieces = int(len(self.data['info']['pieces'])) / 20
             self.pieces = [0] * pieces
 
+    def register(self, bytes):
+        self.downloaded_bytes += bytes
+        now = time.time()
+
+        if self.start_time == None:
+            self.start_time = now
+        else:
+            self.rate = self.downloaded_bytes / (1024 * (now - self.start_time))
+
+        self.last_time = now
+
     def checkpiece(self, index, data):
         sha1 = hashlib.sha1(data).digest()
         offset = index * 20
@@ -48,6 +65,7 @@ class Torrent(object):
         return sha1 == expected
 
     def writepiece(self, index, data):
+        self.downloaded_pieces += 1
         path = self.data['info']['name']
         piece_length = self.data['info']['piece length']
         with open(path, 'r+') as fh:
@@ -121,6 +139,10 @@ class PeerConnection(object):
     def __init__(self, peer):
         self.peer = peer
         self.state = 'Not connected'
+        self.piece = -1
+        self.last_download = None
+        self.dropflag = False
+        self.timetodie = 0
 
     def connect(self):
         self.state = 'Connecting'
@@ -129,6 +151,16 @@ class PeerConnection(object):
         self.socket.connect(self.peer)
         self.socket.settimeout(None)
         self.state = 'Connected'
+        self.update_download()
+
+    def is_stalled(self):
+        if self.last_download:
+            self.timetodie = 60 - (time.time() - self.last_download)
+            return self.timetodie <= 0
+        return False
+
+    def update_download(self):
+        self.last_download = time.time()
 
     def checkhandshake(self, hand):
         return True
@@ -140,19 +172,23 @@ class PeerConnection(object):
                 '0' * 8,
                 torrent.hash,
                 clientid)
-        self.socket.send(hand)
-        hand = self.socket.recv(68)
+        self._send(hand)
+        self.state = 'Handshake sent'
+        hand = self._receive(len(hand))
         if hand == '':
             return False
-        self.state = 'Handshaked'
+        self.state = 'Handshake received'
         return self.checkhandshake(hand)
 
     def _receive(self, bytes):
         payload = bytearray()
         while bytes:
+            self.socket.settimeout(5)
             data = self.socket.recv(min(bytes, 1024))
             bytes -= len(data)
             payload.extend(data)
+            if self.dropflag == True:
+                raise Exception('Dropped connection')
         return payload
 
     def receive(self):
@@ -167,8 +203,11 @@ class PeerConnection(object):
     def _send(self, bytes):
         length = len(bytes)
         while length:
+            self.socket.settimeout(5)
             sent = self.socket.send(bytes)
             length -= sent
+            if self.dropflag == True:
+                raise Exception('Dropped connection')
 
     def send(self, mtype, **kwargs):
         payload = bytearray()
@@ -183,3 +222,5 @@ class PeerConnection(object):
         bytes = struct.pack('!I', length) + payload
         self._send(bytes)
 
+    def drop(self):
+        self.dropflag = True
