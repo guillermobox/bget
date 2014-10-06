@@ -4,9 +4,12 @@ import os
 import select
 import socket
 import struct
+import threading
 import time
 import utils
 import urllib
+
+fileLock = threading.Lock()
 
 MSG_CHOKE        = '\x00'
 MSG_UNCHOKE      = '\x01'
@@ -68,9 +71,10 @@ class Torrent(object):
         self.downloaded_pieces += 1
         path = self.data['info']['name']
         piece_length = self.data['info']['piece length']
-        with open(path, 'r+') as fh:
-            fh.seek(piece_length * index)
-            fh.write(data)
+        with fileLock:
+            with open(path, 'r+') as fh:
+                fh.seek(piece_length * index)
+                fh.write(data)
 
     def show(self):
         info = self.data['info']

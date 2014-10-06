@@ -68,7 +68,9 @@ def peer_thread(torrent, clientid, tid):
         try:
             mtype, mdata = pc.receive()
         except:
+            piece = pc.piece
             pc = newpeer()
+            pc.piece = piece
             continue
 
         if mtype == bittorrent.MSG_UNCHOKE:
@@ -78,6 +80,7 @@ def peer_thread(torrent, clientid, tid):
             pc.state = 'Chocked!'
         elif mtype == bittorrent.MSG_PIECE:
             pc.state = 'Receiving data'
+            pc.update_download()
             index, begin = struct.unpack('!II', mdata[0:8])
             data = mdata[8:]
             piece_data[begin:begin+len(data)] = data
@@ -128,6 +131,8 @@ def main():
             if i in peer_connections.keys():
                 if peer_connections[i].is_stalled():
                     peer_connections[i].drop()
+                    print '\033[K Droppped'
+                    continue
                 piece = peer_connections[i].piece
                 peer = '{0[0]}:{0[1]}'.format(peer_connections[i].peer)
                 dietime = int(peer_connections[i].timetodie)
