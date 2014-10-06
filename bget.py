@@ -1,245 +1,100 @@
-import sys
-import hashlib
-import math
-import socket
-import array
-import pprint
-import struct
-import time
-import urllib
 import os
 import random
+import struct
+import sys
 import threading
-import pickle
 
 import bencode
 import bittorrent
 
-MSG_CHOKE = '\x00'
-MSG_UNCHOKE = '\x01'
-MSG_INTERESTED = '\x02'
-MSG_UNINTERESTED = '\x03'
-MSG_HAVE = '\x04'
-MSG_BITFIELD = '\x05'
-MSG_REQUEST = '\x06'
-MSG_PIECE = '\x07'
-MSG_CANCEL = '\x08'
-BLOCKSIZE = 16384
-
 verbose = True
 
-available_peers = set()
-invalid_peers = set()
-using_peers = set()
-total_bytes = 0
-downloaded_bytes = {}
-download_rate = 0
-total_pieces = 0
-peers = []
-excluded_peers = []
+pieces = []
+peer_whitelist = set()
+peer_blacklist = set()
 peer_connections = {}
-peer_states = {}
-peer_pieces = {}
-clientid = os.urandom(20)
+
 peer_lock = threading.Lock()
 
-def get_freepeer(tid):
-    if peers:
-        peer = random.choice(peers)
-        peers.remove(peer)
-        excluded_peers.append(peer)
-        peer_connections[tid] = peer['ip'] + ':' + str(peer['port'])
-        return peer
-    else:
-        return None
-
-def get_freepiece():
+def get_freepeer():
     with peer_lock:
-        for i in range(len(pieces)):
-            if pieces[i] == 0 :
-                pieces[i] = 1
+        if peer_whitelist:
+            peer = random.choice(tuple(peer_whitelist))
+            peer_whitelist.remove(peer)
+            peer_blacklist.add(peer)
+            return peer
+        else:
+            return None
+
+def get_freepiece(torrent):
+    with peer_lock:
+        for i in range(len(torrent.pieces)):
+            if torrent.pieces[i] == 0 :
+                torrent.pieces[i] = 1
                 return i
         else:
             return None
 
-def update_peer_list(tracker):
-    np = parse_peers(tracker['peers'])
-    for peer in np:
-        if peer not in excluded_peers:
-            peers.append(peer)
-
-def handshake(infohash, clientid):
-    ret = ''
-    ret += chr(19)
-    ret += 'BitTorrent protocol'
-    ret += '0' * 8
-    ret += infohash
-    ret += clientid
-    return ret
-
-def create_message(msgtype, **kwargs):
-    msg = '' + msgtype
-    if msgtype == MSG_REQUEST:
-        msg += struct.pack('!III', kwargs['piece'], kwargs['begin'] * BLOCKSIZE, BLOCKSIZE)
-    elif msgtype == MSG_HAVE:
-        msg += struct.pack('!I', kwargs['piece'])
-    length = len(msg)
-    return struct.pack('!I', length) + msg
+def update_peers(tracker):
+    peers = tracker.peers()
+    peer_whitelist.update(peers - peer_blacklist)
 
 def peer_thread(torrent, clientid, tid):
-    piece = ''
-    blockid = 0
-    blockammount = 16
-    peer_choked = 1
-    me_interested = 0
-    downloaded = 1
+    BLOCKSIZE = 16384
+    peer = get_freepeer()
+    pc = bittorrent.PeerConnection(peer)
+    peer_connections[tid] = pc
+    pc.connect()
+    pc.handshake(torrent, clientid)
 
-    peer = get_freepeer(tid)
-    if peer == None:
-        peer_connections[tid] = 'No more peers left!'
-        exit(1)
+    pc.send(bittorrent.MSG_INTERESTED)
+    piece_data = bytearray(int(torrent.data['info']['piece length']))
+    piece = get_freepiece(torrent)
+    blocks = int(torrent.data['info']['piece length']) / BLOCKSIZE
+    blockid = 0
 
     while True:
-        try:
-            peer_states[tid] = 'Connecting...'
-            if downloaded == 1:
-                piecen = get_freepiece()
-                if piecen != None:
-                    peer_pieces[tid] = piecen
+        mtype, mdata = pc.receive()
+        print tid, 'Message:', ord(mtype)
+        if mtype == bittorrent.MSG_UNCHOKE:
+            print tid, 'Unchoke!'
+            pc.send(bittorrent.MSG_REQUEST, piece=piece, begin=blockid * BLOCKSIZE, length=BLOCKSIZE)
+            print tid, 'Requested', piece, blockid
+        elif mtype == bittorrent.MSG_PIECE:
+            index, begin = struct.unpack('!II', mdata[0:8])
+            data = mdata[8:]
+            print tid, 'Received piece', index, begin
+            piece_data[begin:begin+len(data)] = data
+            blockid += 1
+            if blockid == blocks:
+                print tid, 'Finished with this piece!'
+                check = torrent.checkpiece(index, piece_data)
+                if check:
+                    print 'ALL OK!'
                 else:
-                    peer_states[tid] = 'Exited, no more pieces left'
-                    exit(1)
-            downloaded = 0
-
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(10)
-            try:
-                s.connect((peer['ip'], peer['port']))
-            except:
-                peer_states[tid] = 'Connection failed'
-                peer = get_freepeer(tid)
-                if peer == None:
-                    peer_connections[tid] = 'No more peers left!'
+                    print 'WOPS!'
                 continue
-            s.settimeout(None)
-            peer_states[tid] = 'Connected'
-            s.send(handshake(torrent.hash, clientid))
-            hand = s.recv(68)
-            if hand == '':
-                peer_states[tid] = 'Handshake not returned!'
-                peer = get_freepeer(tid)
-                if peer == None:
-                    peer_connections[tid] = 'No more peers left!'
-                continue
-            peer_states[tid] = 'Handshaked'
-            s.send(create_message(MSG_INTERESTED))
-            while downloaded == 0:
-                data = s.recv(4)
-                if data=='':
-                    peer_states[tid] = 'Connection broken!'
-                    exit(1)
-                length = struct.unpack('!I', data)[0]
-                if length == 0:
-                    continue
-                msgtype = s.recv(1)
-                length -= 1
-                if msgtype == MSG_UNCHOKE:
-                    peer_states[tid] = 'Unchoked peer'
-                    s.send(create_message(MSG_UNCHOKE))
-                    s.send(create_message(MSG_INTERESTED))
-                    s.send(create_message(MSG_REQUEST, piece=piecen, begin=blockid))
-                elif msgtype == MSG_PIECE:
-                    peer_states[tid] = 'Receiving data'
-                    data = s.recv(8)
-                    index, begin = struct.unpack('!II', data)
-                    length -= 8
-                    data = ''
-                    while length:
-                        input = s.recv(2048)
-                        length -= len(input)
-                        register_download(tid, len(input))
-                        data += input
-                    piece += data
-                    blockid += 1
-                    if blockid == 16:
-                        peer_states[tid] = 'Piece finished'
-                        sha1 = hashlib.sha1(piece).digest()
-                        peer_states[tid] = 'Sha success'
-                        write_piece(torrent, piecen, piece)
-                        pieces[piecen] = 2
-                        downloaded = 1
-                        s.send(create_message(MSG_HAVE, piece=piecen))
-                    else:
-                        s.send(create_message(MSG_REQUEST, piece=piecen, begin=blockid))
-                else:
-                    more = s.recv(length)
-        except:
-            raise
-            peer_states[tid] = 'Exception!'
-            peer = get_freepeer(tid)
-            if peer == None:
-                peer_connections[tid] = 'No more peers left!'
-                exit(1)
-            downloaded = 0
-            continue
-
-    return 0
-
-def register_download(thread, bytes):
-    if bytes > 0:
-        t = time.time()
-        downloaded_bytes[thread] += bytes
+            pc.send(bittorrent.MSG_REQUEST, piece=piece, begin=blockid * BLOCKSIZE, length=BLOCKSIZE)
 
 def main():
     if len(sys.argv) <= 1:
         print 'Usage: bget <torrentpath>'
         exit(1)
 
-    total_length = 0
+    clientid = os.urandom(20)
 
-    try:
-        torrent = bittorrent.Torrent(sys.argv[1])
-    except Exception as e:
-        print 'Torrent imposible to read:', str(e)
-        exit(1)
-
+    torrent = bittorrent.Torrent(sys.argv[1])
     torrent.show()
-
-    pammount = len(torrent.data['info']['pieces']) / 20
-    pieces = [0] * pammount
-    total_bytes = total_length
-    total_pieces = pammount
-
     torrent.start()
 
     tracker = bittorrent.Tracker(torrent.data['announce'])
-    tracker_data = tracker.get(torrent, clientid)
-
-    if False:
-        tracker = read_tracker(torrent['announce'], torrent.hash, clientid, total_length)
-        if not tracker:
-            exit(1)
-        print '  Updating peer list'
-        update_peer_list(tracker)
-        print '  %d peers found'%(len(peers),)
-        print
-        f = open('/tmp/peers.pkl', 'w')
-        pickle.dump(peers, f)
-        f.close()
-    else:
-        print '  Loading peers from pickle file'
-        f = open('/tmp/peers.pkl', 'r')
-        peers = pickle.load(f)
-        f.close()
+    tracker.get(torrent, clientid)
+    update_peers(tracker)
 
     threads = 10
     thread_list = []
 
     for i in range(threads):
-        peer_connections[i] = 'None'
-        peer_states[i] = 'Not connected'
-        peer_pieces[i] = -1
-        downloaded_bytes[i] = 0
         th = threading.Thread(target=peer_thread, args=(torrent, clientid, i))
         thread_list.append(th)
         th.start()
@@ -268,12 +123,8 @@ def main():
 
     while True:
         update_status()
-        time.sleep(1)
-        if len(peers) < 10:
-            tracker = read_tracker(torrent['announce'], torrent.hash, clientid, total_length)
-            if not tracker:
-                exit(1)
-            update_peer_list(tracker)
+        if tracker.get(torrent, clientid):
+            update_peers(tracker)
 
 if __name__=='__main__':
     main()

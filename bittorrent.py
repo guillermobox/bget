@@ -1,13 +1,29 @@
 import bencode
 import hashlib
 import os
+import socket
+import struct
 import time
 import utils
 import urllib
 
+MSG_CHOKE        = '\x00'
+MSG_UNCHOKE      = '\x01'
+MSG_INTERESTED   = '\x02'
+MSG_UNINTERESTED = '\x03'
+MSG_HAVE         = '\x04'
+MSG_BITFIELD     = '\x05'
+MSG_REQUEST      = '\x06'
+MSG_PIECE        = '\x07'
+MSG_CANCEL       = '\x08'
+
 class Torrent(object):
     def __init__(self, path):
         self.readfile(path)
+        self.me_choked = 0
+        self.me_interested = 1
+        self.peer_chocked = 1
+        self.peer_interested = 0
 
     def start(self):
         path = self.data['info']['name']
@@ -22,6 +38,14 @@ class Torrent(object):
             info = bencode.encode(self.data['info'])
             self.hash = hashlib.sha1(info).digest()
             self.size = int(self.data['info']['length'])
+            pieces = int(len(self.data['info']['pieces'])) / 20
+            self.pieces = [0] * pieces
+
+    def checkpiece(self, index, data):
+        sha1 = hashlib.sha1(data).digest()
+        offset = index * 20
+        expected = self.data['info']['pieces'][offset:offset+20]
+        return sha1 == expected
 
     def writepiece(self, index, data):
         path = self.data['info']['name']
@@ -71,8 +95,9 @@ class Tracker(object):
                 compact     = 1)
 
         url = self.announce + '?' + urllib.urlencode(parameters)
-        with urllib.urlopen(url) as fh:
-            data = fh.read()
+        fh = urllib.urlopen(url)
+        data = fh.read()
+        fh.close()
 
         try:
             self.data = bencode.decode(data)
@@ -82,12 +107,79 @@ class Tracker(object):
             return False
 
     def peers(self):
-        peers = []
-        data = tracker['peers']
+        peers = set()
+        data = self.data['peers']
         while len(data) != 0:
             peer = data[0:6]
             data = data[6:]
             ip = socket.inet_ntoa(peer[0:4])
-            port = struct.unpack('!H', data[4:])[0]
-            peers.append((ip, port))
+            port = struct.unpack('!H', peer[4:])[0]
+            peers.add((ip, port))
         return peers
+
+class PeerConnection(object):
+    def __init__(self, peer):
+        self.peer = peer
+        self.state = 'Not connected'
+
+    def connect(self):
+        self.state = 'Connecting'
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.settimeout(10)
+        self.socket.connect(self.peer)
+        self.socket.settimeout(None)
+        self.state = 'Connected'
+
+    def checkhandshake(self, hand):
+        return True
+
+    def handshake(self, torrent, clientid):
+        hand = struct.pack('!c19s8s20s20s',
+                chr(19),
+                'BitTorrent protocol',
+                '0' * 8,
+                torrent.hash,
+                clientid)
+        self.socket.send(hand)
+        hand = self.socket.recv(68)
+        if hand == '':
+            return False
+        self.state = 'Handshaked'
+        return self.checkhandshake(hand)
+
+    def _receive(self, bytes):
+        payload = bytearray()
+        while bytes:
+            data = self.socket.recv(min(bytes, 1024))
+            bytes -= len(data)
+            payload.extend(data)
+        return payload
+
+    def receive(self):
+        data = self._receive(4)
+        length = struct.unpack('!I', data)[0]
+        payload = self._receive(length)
+        if length != 0:
+            return chr(payload[0]), payload[1:]
+        else:
+            return None, None
+
+    def _send(self, bytes):
+        length = len(bytes)
+        while length:
+            sent = self.socket.send(bytes)
+            length -= sent
+
+    def send(self, mtype, **kwargs):
+        payload = bytearray()
+        payload.extend(mtype)
+        if mtype == MSG_REQUEST:
+            payload.extend(struct.pack('!I', kwargs['piece']))
+            payload.extend(struct.pack('!I', kwargs['begin']))
+            payload.extend(struct.pack('!I', kwargs['length']))
+        elif mtype == MSG_HAVE:
+            payload.extend(struct.pack('!I', kwargs['piece']))
+        length = len(payload)
+        bytes = struct.pack('!I', length) + payload
+        self._send(bytes)
+
