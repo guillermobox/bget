@@ -134,7 +134,10 @@ def main():
                     print '\033[K Droppped'
                     continue
                 piece = peer_connections[i].piece
-                peer = '{0[0]}:{0[1]}'.format(peer_connections[i].peer)
+                if peer_connections[i].peer:
+                    peer = '{0[0]}:{0[1]}'.format(peer_connections[i].peer)
+                else:
+                    peer = 'no peer'
                 dietime = int(peer_connections[i].timetodie)
                 state = peer_connections[i].state
                 print '\033[K' + fmt.format(piece, peer, dietime, state)
