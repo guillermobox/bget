@@ -159,7 +159,7 @@ class PeerConnection(object):
 
     def is_stalled(self):
         if self.last_download:
-            self.timetodie = 60 - (time.time() - self.last_download)
+            self.timetodie = 120 - (time.time() - self.last_download)
             return self.timetodie <= 0
         return False
 
