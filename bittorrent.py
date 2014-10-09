@@ -21,6 +21,30 @@ MSG_REQUEST      = '\x06'
 MSG_PIECE        = '\x07'
 MSG_CANCEL       = '\x08'
 
+def msgtostr(msg, mdata):
+    msglist = 'choke unchoke interested uninterested have bitfield request piece cancel'.split()
+    ret = ''
+    msg = ord(msg)
+    if msg < len(msglist):
+        ret = msglist[msg]
+        if chr(msg) == MSG_HAVE:
+            piece, = struct.unpack('!I', mdata)
+            ret += ' piece {0}'.format(piece)
+        elif chr(msg) == MSG_BITFIELD:
+            ret += ' length {0}'.format(len(mdata) * 8)
+        elif chr(msg) == MSG_REQUEST:
+            index, begin, length = struct.unpack('!III', mdata)
+            ret += ' index {0} begin {1} length {2}'.format(index, begin, length)
+        elif chr(msg) == MSG_PIECE:
+            index, begin = stuct.unpack('!II', mdata[0:8])
+            ret += ' index {0} begin {1}'.format(index, begin)
+        elif chr(msg) == MSG_CANCEL:
+            index, begin, length = struct.unpack('!III', mdata)
+            ret += ' index {0} begin {1} length {2}'.format(index, begin, length)
+    else:
+        ret = 'unknown message id ({0})'.format(msg)
+    return ret
+
 class Torrent(object):
     def __init__(self, path):
         self.readfile(path)

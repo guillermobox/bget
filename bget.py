@@ -67,6 +67,7 @@ def peer_thread(torrent, clientid, tid):
     pc.piece = get_freepiece(torrent)
     blocks = int(torrent.data['info']['piece length']) / BLOCKSIZE
     blockid = 0
+    print pc.peer, pc.piece
 
     while True:
         try:
@@ -76,6 +77,8 @@ def peer_thread(torrent, clientid, tid):
             pc = newpeer()
             pc.piece = piece
             continue
+
+        print '{0:4} {1}'.format(tid, bittorrent.msgtostr(mtype, mdata))
 
         if mtype == bittorrent.MSG_UNCHOKE:
             pc.state = 'Ready to receive'
@@ -139,28 +142,31 @@ def main():
         percent = downloaded * 100.0 / total_bytes
         downloaded_chars = int(math.floor(percent * 80 / 100))
         left_chars = 80 - downloaded_chars
-        for i in range(threads):
-            if i in peer_connections.keys():
-                if peer_connections[i].is_stalled():
-                    peer_connections[i].drop()
-                    print '\033[K Droppped'
-                    continue
-                piece = peer_connections[i].piece
-                if peer_connections[i].peer:
-                    peer = '{0[0]}:{0[1]}'.format(peer_connections[i].peer)
+        if config['verbose'] == False:
+            for i in range(threads):
+                if i in peer_connections.keys():
+                    if peer_connections[i].is_stalled():
+                        peer_connections[i].drop()
+                        print '\033[K Droppped'
+                        continue
+                    piece = peer_connections[i].piece
+                    if peer_connections[i].peer:
+                        peer = '{0[0]}:{0[1]}'.format(peer_connections[i].peer)
+                    else:
+                        peer = 'no peer'
+                    dietime = int(peer_connections[i].timetodie)
+                    state = peer_connections[i].state
+                    print '\033[K' + fmt.format(piece, peer, dietime, state)
                 else:
-                    peer = 'no peer'
-                dietime = int(peer_connections[i].timetodie)
-                state = peer_connections[i].state
-                print '\033[K' + fmt.format(piece, peer, dietime, state)
-            else:
-                print '\033[K' + '-'*40
+                    print '\033[K' + '-'*40
 
         print '\033[K  %6d/%06d KiB (%3.2f %%) @ %8.2f KiB/s, %4d/%4d pieces, %d peers'% (torrent.downloaded_bytes/1024, torrent.size/1024, percent, torrent.rate, torrent.downloaded_pieces, 888, len(peer_whitelist))
-        print '\033[K [' + '#' * downloaded_chars + '.' * left_chars + ']'
-        sys.stdout.write('\033[' + str(threads + 2) + 'A')
+        if config['verbose'] == False:
+            print '\033[K [' + '#' * downloaded_chars + '.' * left_chars + ']'
+            sys.stdout.write('\033[' + str(threads + 2) + 'A')
 
-    print '\033[1;1m' + fmt.format('Index', 'Connection', 'Die', 'State') + '\033[0m'
+    if config['verbose'] == False:
+        print '\033[1;1m' + fmt.format('Index', 'Connection', 'Die', 'State') + '\033[0m'
 
     sys.stdout.flush()
 
