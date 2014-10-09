@@ -1,3 +1,4 @@
+import getopt
 import math
 import os
 import random
@@ -9,7 +10,10 @@ import threading
 import bencode
 import bittorrent
 
-verbose = True
+config = dict(
+        verbose=False,
+        threads=1
+)
 
 pieces = []
 peer_whitelist = set()
@@ -97,13 +101,21 @@ def peer_thread(torrent, clientid, tid):
             pc.send(bittorrent.MSG_REQUEST, piece=pc.piece, begin=blockid * BLOCKSIZE, length=BLOCKSIZE)
 
 def main():
-    if len(sys.argv) <= 1:
-        print 'Usage: bget <torrentpath>'
+    options, files = getopt.getopt(sys.argv[1:], 'vt:', ['verbose', 'threads:'])
+
+    if len(files) < 1:
+        print 'Usage: bget [-v] [-t <numthreads>] <torrentpath>'
         exit(1)
+
+    for flag, value in options:
+        if flag == '-v' or flag == '--verbose':
+            config['verbose'] = True
+        elif flag == '-t' or flag == '--threads':
+            config['threads'] = int(value)
 
     clientid = os.urandom(20)
 
-    torrent = bittorrent.Torrent(sys.argv[1])
+    torrent = bittorrent.Torrent(files[0])
     torrent.show()
     torrent.start()
 
@@ -111,7 +123,7 @@ def main():
     tracker.get(torrent, clientid)
     update_peers(tracker)
 
-    threads = 10
+    threads = 1
     thread_list = []
 
     for i in range(threads):
