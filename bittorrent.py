@@ -21,6 +21,9 @@ MSG_REQUEST      = '\x06'
 MSG_PIECE        = '\x07'
 MSG_CANCEL       = '\x08'
 
+class DropConnection(Exception):
+    pass
+
 def msgtostr(msg, mdata):
     msglist = 'choke unchoke interested uninterested have bitfield request piece cancel'.split()
     ret = ''
@@ -179,9 +182,11 @@ class PeerConnection(object):
     def connect(self):
         self.state = 'Connecting'
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.settimeout(10)
-        self.socket.connect(self.peer)
-        self.socket.settimeout(None)
+        self.socket.settimeout(120)
+        try:
+            self.socket.connect(self.peer)
+        except socket.timeout:
+            raise DropConnection('Connection timed out')
         self.state = 'Connected'
         self.update_download()
 
@@ -215,12 +220,14 @@ class PeerConnection(object):
     def _receive(self, bytes):
         payload = bytearray()
         while bytes:
-            self.socket.settimeout(10)
-            data = self.socket.recv(min(bytes, 1024))
+            try:
+                data = self.socket.recv(min(bytes, 1024))
+            except socket.timeout:
+                raise DropConnection('Connection timed out')
+            if not data:
+                raise DropConnection('Peer disconnected')
             bytes -= len(data)
             payload.extend(data)
-            if self.dropflag == True:
-                raise Exception('Dropped connection')
         return payload
 
     def receive(self):
@@ -235,11 +242,11 @@ class PeerConnection(object):
     def _send(self, bytes):
         length = len(bytes)
         while length:
-            self.socket.settimeout(10)
-            sent = self.socket.send(bytes)
+            try:
+                sent = self.socket.send(bytes)
+            except socket.timeout:
+                raise DropConnection('Connection timed out')
             length -= sent
-            if self.dropflag == True:
-                raise Exception('Dropped connection')
 
     def send(self, mtype, **kwargs):
         payload = bytearray()
