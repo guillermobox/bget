@@ -215,7 +215,7 @@ class PeerConnection(object):
     def _receive(self, bytes):
         payload = bytearray()
         while bytes:
-            self.socket.settimeout(5)
+            self.socket.settimeout(10)
             data = self.socket.recv(min(bytes, 1024))
             bytes -= len(data)
             payload.extend(data)
@@ -235,7 +235,7 @@ class PeerConnection(object):
     def _send(self, bytes):
         length = len(bytes)
         while length:
-            self.socket.settimeout(5)
+            self.socket.settimeout(10)
             sent = self.socket.send(bytes)
             length -= sent
             if self.dropflag == True:

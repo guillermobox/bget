@@ -49,17 +49,17 @@ def peer_thread(torrent, clientid, tid):
 
     def newpeer():
         while True:
-            try:
-                peer = get_freepeer()
-                pc = bittorrent.PeerConnection(peer)
-                peer_connections[tid] = pc
-                pc.connect()
-                if pc.handshake(torrent, clientid) == False:
-                    continue
-                pc.send(bittorrent.MSG_INTERESTED)
-                break
-            except:
+            peer = get_freepeer()
+            pc = bittorrent.PeerConnection(peer)
+            print '{0:4} Connecting with peer {1}:{2}'.format(tid, peer[0], peer[1])
+            peer_connections[tid] = pc
+            print '{0:4} {1}'.format(tid, 'Handshaking')
+            pc.connect()
+            if pc.handshake(torrent, clientid) == False:
                 continue
+            print '{0:4} {1}'.format(tid, 'Handshaked')
+            #pc.send(bittorrent.MSG_INTERESTED)
+            break
         return pc
 
     pc = newpeer()
@@ -67,16 +67,9 @@ def peer_thread(torrent, clientid, tid):
     pc.piece = get_freepiece(torrent)
     blocks = int(torrent.data['info']['piece length']) / BLOCKSIZE
     blockid = 0
-    print pc.peer, pc.piece
 
     while True:
-        try:
-            mtype, mdata = pc.receive()
-        except:
-            piece = pc.piece
-            pc = newpeer()
-            pc.piece = piece
-            continue
+        mtype, mdata = pc.receive()
 
         print '{0:4} {1}'.format(tid, bittorrent.msgtostr(mtype, mdata))
 
@@ -160,8 +153,8 @@ def main():
                 else:
                     print '\033[K' + '-'*40
 
-        print '\033[K  %6d/%06d KiB (%3.2f %%) @ %8.2f KiB/s, %4d/%4d pieces, %d peers'% (torrent.downloaded_bytes/1024, torrent.size/1024, percent, torrent.rate, torrent.downloaded_pieces, 888, len(peer_whitelist))
         if config['verbose'] == False:
+            print '\033[K  %6d/%06d KiB (%3.2f %%) @ %8.2f KiB/s, %4d/%4d pieces, %d peers'% (torrent.downloaded_bytes/1024, torrent.size/1024, percent, torrent.rate, torrent.downloaded_pieces, 888, len(peer_whitelist))
             print '\033[K [' + '#' * downloaded_chars + '.' * left_chars + ']'
             sys.stdout.write('\033[' + str(threads + 2) + 'A')
 
