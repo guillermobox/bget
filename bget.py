@@ -50,7 +50,7 @@ def peer_thread(torrent, clientid, tid):
     def newpeer():
         while True:
             peer = get_freepeer()
-            pc = bittorrent.PeerConnection(peer)
+            pc = bittorrent.PeerConnection(torrent, peer)
             print '{0:4} Connecting with peer {1}:{2}'.format(tid, peer[0], peer[1])
             peer_connections[tid] = pc
             print '{0:4} {1}'.format(tid, 'Handshaking')
@@ -119,7 +119,7 @@ def main():
     tracker.get(torrent, clientid)
     update_peers(tracker)
 
-    threads = 1
+    threads = config['threads']
     thread_list = []
 
     for i in range(threads):

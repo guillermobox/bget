@@ -27,6 +27,8 @@ class DropConnection(Exception):
 def msgtostr(msg, mdata):
     msglist = 'choke unchoke interested uninterested have bitfield request piece cancel'.split()
     ret = ''
+    if msg == None:
+        return 'keep alive'
     msg = ord(msg)
     if msg < len(msglist):
         ret = msglist[msg]
@@ -74,8 +76,8 @@ class Torrent(object):
             info = bencode.encode(self.data['info'])
             self.hash = hashlib.sha1(info).digest()
             self.size = int(self.data['info']['length'])
-            pieces = int(len(self.data['info']['pieces'])) / 20
-            self.pieces = [0] * pieces
+            self.numpieces = int(len(self.data['info']['pieces'])) / 20
+            self.pieces = [0] * self.numpieces
 
     def register(self, bytes):
         self.downloaded_bytes += bytes
@@ -171,13 +173,15 @@ class Tracker(object):
         return peers
 
 class PeerConnection(object):
-    def __init__(self, peer):
+    def __init__(self, torrent, peer):
         self.peer = peer
         self.state = 'Not connected'
         self.piece = -1
         self.last_download = None
         self.dropflag = False
         self.timetodie = 0
+        self.torrent = torrent
+        self.have = '0' * self.torrent.numpieces
 
     def connect(self):
         self.state = 'Connecting'
@@ -202,12 +206,12 @@ class PeerConnection(object):
     def checkhandshake(self, hand):
         return True
 
-    def handshake(self, torrent, clientid):
+    def handshake(self, clientid):
         hand = struct.pack('!c19s8s20s20s',
                 chr(19),
                 'BitTorrent protocol',
                 '0' * 8,
-                torrent.hash,
+                self.torrent.hash,
                 clientid)
         self._send(hand)
         self.state = 'Handshake sent'
