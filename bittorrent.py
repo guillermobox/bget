@@ -41,7 +41,7 @@ def msgtostr(msg, mdata):
             index, begin, length = struct.unpack('!III', mdata)
             ret += ' index {0} begin {1} length {2}'.format(index, begin, length)
         elif chr(msg) == MSG_PIECE:
-            index, begin = stuct.unpack('!II', mdata[0:8])
+            index, begin = struct.unpack('!II', mdata[0:8])
             ret += ' index {0} begin {1}'.format(index, begin)
         elif chr(msg) == MSG_CANCEL:
             index, begin, length = struct.unpack('!III', mdata)
@@ -53,10 +53,6 @@ def msgtostr(msg, mdata):
 class Torrent(object):
     def __init__(self, path):
         self.readfile(path)
-        self.me_choked = 0
-        self.me_interested = 1
-        self.peer_chocked = 1
-        self.peer_interested = 0
         self.downloaded_bytes = 0
         self.downloaded_pieces = 0
         self.start_time = None
@@ -174,14 +170,18 @@ class Tracker(object):
 
 class PeerConnection(object):
     def __init__(self, torrent, peer):
+        self.initial_state()
         self.peer = peer
-        self.state = 'Not connected'
-        self.piece = -1
-        self.last_download = None
-        self.dropflag = False
-        self.timetodie = 0
+
         self.torrent = torrent
-        self.have = '0' * self.torrent.numpieces
+        self.have = bytearray(self.torrent.numpieces)
+
+    def initial_state(self):
+        self.me_choked = 0
+        self.me_interested = 1
+        self.peer_chocked = 1
+        self.peer_interested = 0
+        self.state = 'Not connected'
 
     def connect(self):
         self.state = 'Connecting'
@@ -191,17 +191,35 @@ class PeerConnection(object):
             self.socket.connect(self.peer)
         except socket.timeout:
             raise DropConnection('Connection timed out')
+        except socket.error:
+            raise DropConnection('Connection refused')
         self.state = 'Connected'
-        self.update_download()
 
-    def is_stalled(self):
-        if self.last_download:
-            self.timetodie = 120 - (time.time() - self.last_download)
-            return self.timetodie <= 0
-        return False
+    def process(self, message, data):
+        if message == MSG_UNCHOKE:
+            self.state = 'Unchoked'
+            self.peer_chocked = 0
+        elif message == MSG_CHOKE:
+            self.state = 'Choked'
+            self.peer_chocked = 1
+        elif message == MSG_UNINTERESTED:
+            self.state = 'Uninterested'
+            self.peer_interested = 0
+        elif message == MSG_INTERESTED:
+            self.state = 'Interested'
+            self.peer_interested = 1
+        elif message == MSG_BITFIELD:
+            byte2bits = lambda b: [(b>>i)&1 for i in xrange(7,-1,-1)]
+            for n, byte in enumerate(data):
+                bits = byte2bits(byte)
+                self.have[n*8:(n+1)*8] = bits
+        elif message == MSG_HAVE:
+            piece, = struct.unpack('!I', data)
+            self.have[piece] = 1
 
-    def update_download(self):
-        self.last_download = time.time()
+    def peer_percentage(self):
+        pieces = sum(self.have)
+        return 100.0 * pieces / (len(self.have))
 
     def checkhandshake(self, hand):
         return True
@@ -210,7 +228,7 @@ class PeerConnection(object):
         hand = struct.pack('!c19s8s20s20s',
                 chr(19),
                 'BitTorrent protocol',
-                '0' * 8,
+                '\x00' * 8,
                 self.torrent.hash,
                 clientid)
         self._send(hand)
@@ -236,9 +254,10 @@ class PeerConnection(object):
 
     def receive(self):
         data = self._receive(4)
-        length = struct.unpack('!I', data)[0]
+        length, = struct.unpack('!I', data)
         payload = self._receive(length)
         if length != 0:
+            self.process(chr(payload[0]), payload[1:])
             return chr(payload[0]), payload[1:]
         else:
             return None, None
@@ -265,5 +284,3 @@ class PeerConnection(object):
         bytes = struct.pack('!I', length) + payload
         self._send(bytes)
 
-    def drop(self):
-        self.dropflag = True

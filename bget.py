@@ -55,7 +55,7 @@ def peer_thread(torrent, clientid, tid):
             peer_connections[tid] = pc
             print '{0:4} {1}'.format(tid, 'Handshaking')
             pc.connect()
-            if pc.handshake(torrent, clientid) == False:
+            if pc.handshake(clientid) == False:
                 continue
             print '{0:4} {1}'.format(tid, 'Handshaked')
             #pc.send(bittorrent.MSG_INTERESTED)
@@ -74,13 +74,8 @@ def peer_thread(torrent, clientid, tid):
         print '{0:4} {1}'.format(tid, bittorrent.msgtostr(mtype, mdata))
 
         if mtype == bittorrent.MSG_UNCHOKE:
-            pc.state = 'Ready to receive'
             pc.send(bittorrent.MSG_REQUEST, piece=pc.piece, begin=blockid * BLOCKSIZE, length=BLOCKSIZE)
-        elif mtype == bittorrent.MSG_CHOKE:
-            pc.state = 'Chocked!'
         elif mtype == bittorrent.MSG_PIECE:
-            pc.state = 'Receiving data'
-            pc.update_download()
             index, begin = struct.unpack('!II', mdata[0:8])
             data = mdata[8:]
             piece_data[begin:begin+len(data)] = data
@@ -92,7 +87,6 @@ def peer_thread(torrent, clientid, tid):
                     torrent.writepiece(index, piece_data)
                     pc.piece = get_freepiece(torrent)
                     if pc.piece == None:
-                        pc.state = 'Idle, no pieces left'
                         return
             pc.send(bittorrent.MSG_REQUEST, piece=pc.piece, begin=blockid * BLOCKSIZE, length=BLOCKSIZE)
 
