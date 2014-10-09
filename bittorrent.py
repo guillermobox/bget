@@ -114,7 +114,8 @@ class Tracker(object):
                 uploaded    = 0,
                 downloaded  = 0,
                 left        = torrent.size,
-                compact     = 1)
+                compact     = 1,
+                numwant     = 100)
 
         url = self.announce + '?' + urllib.urlencode(parameters)
         fh = urllib.urlopen(url)
@@ -123,7 +124,10 @@ class Tracker(object):
 
         try:
             self.data = bencode.decode(data)
-            self.waittime = time.time() + int(self.data['interval'])
+            if 'interval' in self.data:
+                self.waittime = time.time() + int(self.data['interval'])
+            else:
+                self.waittime = time.time() + 300
             return True
         except:
             return False
