@@ -12,7 +12,8 @@ import bittorrent
 
 config = dict(
         verbose=False,
-        threads=1
+        threads=1,
+        info=False,
 )
 
 pieces = []
@@ -91,10 +92,10 @@ def peer_thread(torrent, clientid, tid):
             pc.send(bittorrent.MSG_REQUEST, piece=pc.piece, begin=blockid * BLOCKSIZE, length=BLOCKSIZE)
 
 def main():
-    options, files = getopt.getopt(sys.argv[1:], 'vt:', ['verbose', 'threads:'])
+    options, files = getopt.getopt(sys.argv[1:], 'ivt:', ['info', 'verbose', 'threads:'])
 
     if len(files) < 1:
-        print 'Usage: bget [-v] [-t <numthreads>] <torrentpath>'
+        print 'Usage: bget [-i|--info] [-v|--verbose] [-t|--threads <numthreads>] <torrentpath>'
         exit(1)
 
     for flag, value in options:
@@ -102,11 +103,17 @@ def main():
             config['verbose'] = True
         elif flag == '-t' or flag == '--threads':
             config['threads'] = int(value)
+        elif flag == '-i' or flag == '--info':
+            config['info'] = True
 
     clientid = os.urandom(20)
 
     torrent = bittorrent.Torrent(files[0])
     torrent.show()
+
+    if config['info'] == True:
+        exit(0)
+
     torrent.start()
 
     tracker = bittorrent.Tracker(torrent.data['announce'])
