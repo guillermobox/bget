@@ -10,6 +10,7 @@ import utils
 import urllib
 
 fileLock = threading.Lock()
+peerLock = threading.Lock()
 
 MSG_CHOKE        = '\x00'
 MSG_UNCHOKE      = '\x01'
@@ -140,7 +141,7 @@ class Tracker(object):
         self.announce = announce
         self.waittime = 0
 
-    def get(self, torrent, clientid):
+    def update(self, torrent, clientid):
         if time.time() < self.waittime:
             return False
 
@@ -180,6 +181,23 @@ class Tracker(object):
             port = struct.unpack('!H', peer[4:])[0]
             peers.add((ip, port))
         return peers
+
+class Swarm(object):
+    def __init__(self):
+        self.whitelist = set()
+        self.blacklist = set()
+
+    def update_peers(self, tracker):
+        peers = tracker.peers()
+        self.whitelist.update(peers - self.blacklist)
+
+    def get_peer(self):
+        if self.whitelist:
+            peer = self.whitelist.pop()
+            self.blacklist.add(peer)
+            return peer
+        else:
+            return None
 
 class PeerConnection(object):
     def __init__(self, torrent, peer):
