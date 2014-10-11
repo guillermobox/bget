@@ -71,7 +71,12 @@ class Torrent(object):
             self.data = bencode.decode(data)
             info = bencode.encode(self.data['info'])
             self.hash = hashlib.sha1(info).digest()
-            self.size = int(self.data['info']['length'])
+            if 'length' in self.data['info']:
+                self.size = int(self.data['info']['length'])
+            else:
+                self.size = 0
+                for file in self.data['info']['files']:
+                    self.size += file['length']
             self.numpieces = int(len(self.data['info']['pieces'])) / 20
             self.pieces = [0] * self.numpieces
 
@@ -106,13 +111,12 @@ class Torrent(object):
         print '='*80
         if 'length' in info:
             print '  Single file torrent'
-            print '   - (%d KiB) %s'%(info['length']/1024, info['name'])
+            print '   - (%8d KiB) %s'%(info['length']/1024, info['name'])
             total_length = int(info['length'])
         else:
             print '  Multiple file torrent'
             for file in info['files']:
-                print '   - (%d KiB) %s'%(file['length']/1024, os.path.join(info['name'], file['path'][0]))
-                total_length += int(file['length'])
+                print '   - (%8d KiB) %s'%(file['length']/1024, os.path.join(info['name'], file['path'][0]))
         print '  Piece size: %d KiB'%(info['piece length']/1024,)
         print '  Pieces to download: %d'%(len(info['pieces'])/20,)
         print '  Creation date:', time.asctime(time.gmtime(int(self.data['creation date'])))
