@@ -52,7 +52,7 @@ def msgtostr(msg, mdata):
 
 class Torrent(object):
     def __init__(self, path):
-        self.readfile(path)
+        self.readtorrent(path)
         self.downloaded_bytes = 0
         self.downloaded_pieces = 0
         self.start_time = None
@@ -65,7 +65,7 @@ class Torrent(object):
             length = int(self.data['info']['length'])
             fh.truncate(length)
 
-    def readfile(self, path):
+    def readtorrent(self, path):
         with open(path, 'r') as fh:
             data = fh.read()
             self.data = bencode.decode(data)
@@ -78,7 +78,7 @@ class Torrent(object):
                 for file in self.data['info']['files']:
                     self.size += file['length']
             self.numpieces = int(len(self.data['info']['pieces'])) / 20
-            self.pieces = [0] * self.numpieces
+            self.pieces = bytearray(self.numpieces)
 
     def register(self, bytes):
         self.downloaded_bytes += bytes
@@ -90,6 +90,15 @@ class Torrent(object):
             self.rate = self.downloaded_bytes / (1024 * (now - self.start_time))
 
         self.last_time = now
+
+    def getpiece(self, piecelist):
+        for i in xrange(len(self.pieces)):
+            piece = self.pieces[i]
+            have = piecelist[i]
+            if have == 0 and piece == 0:
+                self.pieces[i] = 1
+                return i
+        return None
 
     def checkpiece(self, index, data):
         sha1 = hashlib.sha1(data).digest()
@@ -176,6 +185,7 @@ class PeerConnection(object):
     def __init__(self, torrent, peer):
         self.initial_state()
         self.peer = peer
+        self.piece = None
 
         self.torrent = torrent
         self.have = bytearray(self.torrent.numpieces)
@@ -241,6 +251,8 @@ class PeerConnection(object):
         if hand == '':
             return False
         self.state = 'Handshake received'
+        self.piece = self.torrent.getpiece(self.have)
+        print 'Selected piece:', self.piece
         return self.checkhandshake(hand)
 
     def _receive(self, bytes):

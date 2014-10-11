@@ -33,14 +33,6 @@ def get_freepeer():
         else:
             return None
 
-def get_freepiece(torrent):
-    with peer_lock:
-        for i in range(len(torrent.pieces)):
-            if torrent.pieces[i] == 0 :
-                torrent.pieces[i] = 1
-                return i
-        return None
-
 def update_peers(tracker):
     peers = tracker.peers()
     peer_whitelist.update(peers - peer_blacklist)
@@ -65,7 +57,6 @@ def peer_thread(torrent, clientid, tid):
 
     pc = newpeer()
     piece_data = bytearray(int(torrent.data['info']['piece length']))
-    pc.piece = get_freepiece(torrent)
     blocks = int(torrent.data['info']['piece length']) / BLOCKSIZE
     blockid = 0
 
@@ -86,7 +77,6 @@ def peer_thread(torrent, clientid, tid):
                 blockid = 0
                 if torrent.checkpiece(index, piece_data):
                     torrent.writepiece(index, piece_data)
-                    pc.piece = get_freepiece(torrent)
                     if pc.piece == None:
                         return
             pc.send(bittorrent.MSG_REQUEST, piece=pc.piece, begin=blockid * BLOCKSIZE, length=BLOCKSIZE)
