@@ -1,6 +1,7 @@
 import bencode
 import hashlib
 import os
+import random
 import select
 import socket
 import struct
@@ -34,18 +35,22 @@ def msgtostr(msg, mdata):
     if msg < len(msglist):
         ret = msglist[msg]
         if chr(msg) == MSG_HAVE:
-            piece, = struct.unpack('!I', mdata)
-            ret += ' piece {0}'.format(piece)
+            #index = mdata['index']
+            index, = struct.unpack('!I', mdata)
+            ret += ' piece {0}'.format(index)
         elif chr(msg) == MSG_BITFIELD:
             ret += ' length {0}'.format(len(mdata) * 8)
         elif chr(msg) == MSG_REQUEST:
-            index, begin, length = struct.unpack('!III', mdata)
+            index, begin, length = struct.unpack('!III', mdata[0:12])
+            #index, begin, length = mdata['index'], mdata['begin'], mdata['length']
             ret += ' index {0} begin {1} length {2}'.format(index, begin, length)
         elif chr(msg) == MSG_PIECE:
             index, begin = struct.unpack('!II', mdata[0:8])
+            #index, begin = mdata['index'], mdata['begin']
             ret += ' index {0} begin {1}'.format(index, begin)
         elif chr(msg) == MSG_CANCEL:
-            index, begin, length = struct.unpack('!III', mdata)
+            index, begin, length = struct.unpack('!III', mdata[0:12])
+            #index, begin, length = mdata['index'], mdata['begin'], mdata['length']
             ret += ' index {0} begin {1} length {2}'.format(index, begin, length)
     else:
         ret = 'unknown message id ({0})'.format(msg)
@@ -80,6 +85,7 @@ class Torrent(object):
                     self.size += file['length']
             self.numpieces = int(len(self.data['info']['pieces'])) / 20
             self.pieces = bytearray(self.numpieces)
+            self.piecelength = int(self.data['info']['piece length'])
 
     def register(self, bytes):
         self.downloaded_bytes += bytes
@@ -96,7 +102,7 @@ class Torrent(object):
         for i in xrange(len(self.pieces)):
             piece = self.pieces[i]
             have = piecelist[i]
-            if have == 0 and piece == 0:
+            if have == 1 and piece == 0:
                 self.pieces[i] = 1
                 return i
         return None
@@ -141,13 +147,13 @@ class Tracker(object):
         self.announce = announce
         self.waittime = 0
 
-    def update(self, torrent, clientid):
+    def update(self, torrent):
         if time.time() < self.waittime:
             return False
 
         parameters = dict(
                 info_hash   = torrent.hash,
-                peer_id     = clientid,
+                peer_id     = utils.clientid,
                 port        = 6881,
                 event       = 'started',
                 uploaded    = 0,
@@ -193,20 +199,21 @@ class Swarm(object):
 
     def get_peer(self):
         if self.whitelist:
-            peer = self.whitelist.pop()
+            peer = random.choice(tuple(self.whitelist))
+            self.whitelist.remove(peer)
             self.blacklist.add(peer)
             return peer
         else:
             return None
 
+    def size(self):
+        return len(self.whitelist)
+
 class PeerConnection(object):
     def __init__(self, torrent, peer):
-        self.initial_state()
         self.peer = peer
-        self.piece = None
-
         self.torrent = torrent
-        self.have = bytearray(self.torrent.numpieces)
+        self.initial_state()
 
     def initial_state(self):
         self.me_choked = 0
@@ -214,6 +221,10 @@ class PeerConnection(object):
         self.peer_chocked = 1
         self.peer_interested = 0
         self.state = 'Not connected'
+        self.piece = None
+        self.piecebuffer = bytearray(self.torrent.piecelength)
+        self.pieceoffset = 0
+        self.have = bytearray(self.torrent.numpieces)
 
     def connect(self):
         self.state = 'Connecting'
@@ -226,11 +237,14 @@ class PeerConnection(object):
         except socket.error:
             raise DropConnection('Connection refused')
         self.state = 'Connected'
+        self.handshake()
+        self.send(MSG_INTERESTED)
 
     def process(self, message, data):
         if message == MSG_UNCHOKE:
             self.state = 'Unchoked'
             self.peer_chocked = 0
+            self.request_piece()
         elif message == MSG_CHOKE:
             self.state = 'Choked'
             self.peer_chocked = 1
@@ -248,6 +262,32 @@ class PeerConnection(object):
         elif message == MSG_HAVE:
             piece, = struct.unpack('!I', data)
             self.have[piece] = 1
+        elif message == MSG_PIECE:
+            index, begin = struct.unpack('!II', data[0:8])
+            data = data[8:]
+            self.piecebuffer[begin:begin+len(data)] = data
+            self.torrent.register(len(data))
+            self.pieceoffset += utils.config['blocksize']
+            self.request_piece()
+
+    def has_piece(self):
+        if self.pieceoffset == self.torrent.piecelength:
+            return True
+
+    def submit_piece(self):
+        if self.torrent.checkpiece(self.piece, self.piecebuffer):
+            self.torrent.writepiece(self.piece, self.piecebuffer)
+            self.pieceoffset = 0
+        else:
+            return False
+
+    def request_piece(self):
+        self.send(MSG_REQUEST, piece=self.piece, begin=self.pieceoffset, length=utils.config['blocksize'])
+
+    def reserve_piece(self):
+        self.piece = self.torrent.getpiece(self.have)
+        if self.piece == None:
+            raise DropConnection('Piece not found!')
 
     def peer_percentage(self):
         pieces = sum(self.have)
@@ -256,21 +296,17 @@ class PeerConnection(object):
     def checkhandshake(self, hand):
         return True
 
-    def handshake(self, clientid):
+    def handshake(self):
         hand = struct.pack('!c19s8s20s20s',
                 chr(19),
                 'BitTorrent protocol',
                 '\x00' * 8,
                 self.torrent.hash,
-                clientid)
+                utils.clientid)
         self._send(hand)
         self.state = 'Handshake sent'
         hand = self._receive(len(hand))
-        if hand == '':
-            return False
         self.state = 'Handshake received'
-        self.piece = self.torrent.getpiece(self.have)
-        print 'Selected piece:', self.piece
         return self.checkhandshake(hand)
 
     def _receive(self, bytes):
@@ -290,11 +326,13 @@ class PeerConnection(object):
         data = self._receive(4)
         length, = struct.unpack('!I', data)
         payload = self._receive(length)
-        if length != 0:
-            self.process(chr(payload[0]), payload[1:])
-            return chr(payload[0]), payload[1:]
-        else:
+
+        if length == 0:
             return None, None
+
+        mtype, mdata = chr(payload[0]), payload[1:]
+        self.process(mtype, mdata)
+        return mtype, mdata
 
     def _send(self, bytes):
         length = len(bytes)

@@ -12,56 +12,57 @@ import bittorrent
 import utils
 
 # global client id used to communicate with the tracker
-clientid = os.urandom(20)
+utils.generate_clientid()
 
 def peer_thread(torrent, swarm, tid):
     # This thread should connect to a peer, or answer to a peer connection,
     # and provide with all the functionality needed to interact with it.
     # The PeerConnection object will help implementing the communication
     # protocol.
-    BLOCKSIZE = 16384
+    #
+    # The thread has to mantain connections with available peers, or wait
+    # until more peers are available. Also, it has to request pieces to
+    # the connected peer, save the piece and keep requesting free pieces
+    # from the torrent file until the end.
+    #
+    # Also, the multiple causes of failure for the thread has to be
+    # dealt with, updating the swarm.
 
     def newpeer():
         while True:
             peer = swarm.get_peer()
             pc = bittorrent.PeerConnection(torrent, peer)
             print '{0:4} Connecting with peer {1}:{2}'.format(tid, peer[0], peer[1])
-            print '{0:4} {1}'.format(tid, 'Handshaking')
             pc.connect()
-            if pc.handshake(clientid) == False:
-                continue
-            print '{0:4} {1}'.format(tid, 'Handshaked')
-            #pc.send(bittorrent.MSG_INTERESTED)
             break
         return pc
 
     pc = newpeer()
-    piece_data = bytearray(int(torrent.data['info']['piece length']))
-    blocks = int(torrent.data['info']['piece length']) / BLOCKSIZE
-    blockid = 0
 
+    # wait for a piece to be downloaded
     while True:
-        mtype, mdata = pc.receive()
-        print '{0:4} {1}'.format(tid, bittorrent.msgtostr(mtype, mdata))
+        message = pc.receive()
+        pc.process(*message)
 
-#        if mtype == bittorrent.MSG_UNCHOKE:
-#            pc.send(bittorrent.MSG_REQUEST, piece=pc.piece, begin=blockid * BLOCKSIZE, length=BLOCKSIZE)
-#        elif mtype == bittorrent.MSG_PIECE:
-#            index, begin = struct.unpack('!II', mdata[0:8])
-#            data = mdata[8:]
-#            piece_data[begin:begin+len(data)] = data
-#            torrent.register(len(data))
-#            blockid += 1
-#            if blockid == blocks:
-#                blockid = 0
-#                if torrent.checkpiece(index, piece_data):
-#                    torrent.writepiece(index, piece_data)
-#                    if pc.piece == None:
-#                        return
-#            pc.send(bittorrent.MSG_REQUEST, piece=pc.piece, begin=blockid * BLOCKSIZE, length=BLOCKSIZE)
+    # download the piece
+    while True:
 
-def update_status(torrent):
-    print 'Downloaded: %d/%d KiB % %.2f KiB/s'%(torrent.downloaded_bytes/1024, torrent.size/1024, torrent.rate)
+        if pc.has_piece():
+            pc.submit_piece()
+            pc.reserve_piece()
+            pc.request_piece()
+
+        if utils.config['verbose']:
+            print '{0:4} {1}'.format(tid, bittorrent.msgtostr(*message))
+
+# Update status of the download on the screen. Called every 1 second by main().
+def update_status(torrent, swarm):
+    if utils.config['verbose'] == True:
+        print 'Downloaded: %d/%d KiB @ %.2f KiB/s Swarm: %d'%(torrent.downloaded_bytes/1024, torrent.size/1024, torrent.rate, swarm.size())
+        sys.stdout.flush()
+    else:
+        print '\rDownloaded: %d/%d KiB @ %.2f KiB/s %d'%(torrent.downloaded_bytes/1024, torrent.size/1024, torrent.rate, swarm.size()),
+        sys.stdout.flush()
 
 def main():
 
@@ -88,7 +89,7 @@ def main():
     torrent.start()
 
     tracker = bittorrent.Tracker(torrent.data['announce'])
-    tracker.update(torrent, clientid)
+    tracker.update(torrent)
 
     swarm = bittorrent.Swarm()
     swarm.update_peers(tracker)
@@ -102,9 +103,9 @@ def main():
         th.start()
 
     while True:
-        update_status(torrent)
+        update_status(torrent, swarm)
         time.sleep(1)
-        if tracker.update(torrent, clientid):
+        if tracker.update(torrent):
             update_peers(tracker)
 
 if __name__=='__main__':
