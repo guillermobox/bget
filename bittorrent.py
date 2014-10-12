@@ -35,22 +35,18 @@ def msgtostr(msg, mdata):
     if msg < len(msglist):
         ret = msglist[msg]
         if chr(msg) == MSG_HAVE:
-            #index = mdata['index']
             index, = struct.unpack('!I', mdata)
             ret += ' piece {0}'.format(index)
         elif chr(msg) == MSG_BITFIELD:
             ret += ' length {0}'.format(len(mdata) * 8)
         elif chr(msg) == MSG_REQUEST:
             index, begin, length = struct.unpack('!III', mdata[0:12])
-            #index, begin, length = mdata['index'], mdata['begin'], mdata['length']
             ret += ' index {0} begin {1} length {2}'.format(index, begin, length)
         elif chr(msg) == MSG_PIECE:
             index, begin = struct.unpack('!II', mdata[0:8])
-            #index, begin = mdata['index'], mdata['begin']
             ret += ' index {0} begin {1}'.format(index, begin)
         elif chr(msg) == MSG_CANCEL:
             index, begin, length = struct.unpack('!III', mdata[0:12])
-            #index, begin, length = mdata['index'], mdata['begin'], mdata['length']
             ret += ' index {0} begin {1} length {2}'.format(index, begin, length)
     else:
         ret = 'unknown message id ({0})'.format(msg)
@@ -106,6 +102,9 @@ class Torrent(object):
                 self.pieces[i] = 1
                 return i
         return None
+
+    def freepiece(self, piece):
+        self.pieces[piece] = 0
 
     def checkpiece(self, index, data):
         sha1 = hashlib.sha1(data).digest()
@@ -220,39 +219,35 @@ class PeerConnection(object):
         self.me_interested = 1
         self.peer_chocked = 1
         self.peer_interested = 0
-        self.state = 'Not connected'
+        self.state = 'not-connected'
         self.piece = None
         self.piecebuffer = bytearray(self.torrent.piecelength)
         self.pieceoffset = 0
         self.have = bytearray(self.torrent.numpieces)
 
     def connect(self):
-        self.state = 'Connecting'
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.settimeout(120)
+        self.socket.settimeout(60)
         try:
             self.socket.connect(self.peer)
         except socket.timeout:
             raise DropConnection('Connection timed out')
         except socket.error:
             raise DropConnection('Connection refused')
-        self.state = 'Connected'
         self.handshake()
+        self.state = 'connected'
         self.send(MSG_INTERESTED)
 
     def process(self, message, data):
         if message == MSG_UNCHOKE:
-            self.state = 'Unchoked'
+            self.state = 'ready'
             self.peer_chocked = 0
-            self.request_piece()
         elif message == MSG_CHOKE:
-            self.state = 'Choked'
+            self.state = 'connected'
             self.peer_chocked = 1
         elif message == MSG_UNINTERESTED:
-            self.state = 'Uninterested'
             self.peer_interested = 0
         elif message == MSG_INTERESTED:
-            self.state = 'Interested'
             self.peer_interested = 1
         elif message == MSG_BITFIELD:
             byte2bits = lambda b: [(b>>i)&1 for i in xrange(7,-1,-1)]
@@ -268,11 +263,13 @@ class PeerConnection(object):
             self.piecebuffer[begin:begin+len(data)] = data
             self.torrent.register(len(data))
             self.pieceoffset += utils.config['blocksize']
-            self.request_piece()
+            if self.pieceoffset < self.torrent.piecelength:
+                self.request_piece()
 
     def has_piece(self):
-        if self.pieceoffset == self.torrent.piecelength:
+        if self.pieceoffset >= self.torrent.piecelength:
             return True
+        return False
 
     def submit_piece(self):
         if self.torrent.checkpiece(self.piece, self.piecebuffer):
@@ -281,13 +278,21 @@ class PeerConnection(object):
         else:
             return False
 
+    def send_interested(self):
+        self.send(MSG_INTERESTED)
+
     def request_piece(self):
+        self.state = 'downloading'
         self.send(MSG_REQUEST, piece=self.piece, begin=self.pieceoffset, length=utils.config['blocksize'])
+
+    def free_piece(self):
+        self.state = 'ready'
+        self.torrent.freepiece(self.piece)
+        self.piece = None
 
     def reserve_piece(self):
         self.piece = self.torrent.getpiece(self.have)
-        if self.piece == None:
-            raise DropConnection('Piece not found!')
+        return self.piece
 
     def peer_percentage(self):
         pieces = sum(self.have)
@@ -304,9 +309,7 @@ class PeerConnection(object):
                 self.torrent.hash,
                 utils.clientid)
         self._send(hand)
-        self.state = 'Handshake sent'
         hand = self._receive(len(hand))
-        self.state = 'Handshake received'
         return self.checkhandshake(hand)
 
     def _receive(self, bytes):
@@ -316,6 +319,8 @@ class PeerConnection(object):
                 data = self.socket.recv(min(bytes, 1024))
             except socket.timeout:
                 raise DropConnection('Connection timed out')
+            except socket.error:
+                raise DropConnection('Connection reset!')
             if not data:
                 raise DropConnection('Peer disconnected')
             bytes -= len(data)
