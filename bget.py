@@ -55,8 +55,8 @@ def peer_thread(torrent, swarm, tid):
                     if pc.submit_piece() == False:
                         pc.restart_piece()
                     else:
-                        pc.reserve_piece()
-                        pc.request_piece()
+                        if pc.reserve_piece():
+                            pc.request_piece()
 
             message = pc.receive()
             if utils.config['verbose']:
