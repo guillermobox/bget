@@ -43,7 +43,9 @@ def parse_token(string, offset):
 def encode(item):
     if type(item) in [collections.OrderedDict, dict]:
         payload = 'd'
-        for key, value in item.iteritems():
+        keys = sorted(item.keys())
+        for key in keys:
+            value = item[key]
             payload += encode(key)
             payload += encode(value)
         payload += 'e'
