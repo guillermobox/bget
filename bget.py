@@ -62,15 +62,14 @@ def peer_thread(torrent, swarm, tid):
             if utils.config['verbose']:
                 print '{0:4} [{1}] {2}'.format(tid, pc.state, bittorrent.msgtostr(*message))
         except bittorrent.DropConnection:
+            if utils.config['verbose']:
+                print '{0:4} Dropped connection!'.format(tid)
             pc.free_piece()
             pc = newpeer()
 
 # Update status of the download on the screen. Called every 1 second by main().
 def update_status(torrent, swarm):
-    if utils.config['verbose'] == True:
-        print 'Downloaded: %d/%d KiB @ %.2f KiB/s Swarm: %d'%(torrent.downloaded_bytes/1024, torrent.size/1024, torrent.rate, swarm.size())
-        sys.stdout.flush()
-    else:
+    if utils.config['verbose'] != True:
         print '\rDownloaded: %d/%d KiB @ %.2f KiB/s Swarm: %d'%(torrent.downloaded_bytes/1024, torrent.size/1024, torrent.rate, swarm.size()),
         sys.stdout.flush()
 
