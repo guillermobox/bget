@@ -1,10 +1,17 @@
-lbt
-===
+bget
+====
 
-Lightweight BitTorrent Client
------------------------------
+Bget - Like wget, but using bitorrent
+-------------------------------------
 
-Just a lightweight BitTorrent client, wrote to learn about the protocol and to
-download/seed contents from bt in cloud machines or just machines in which you
-don't want to install a full bt client. But mostly to learn about the protocol.
+This is a lightweight bittorrent client, wrote to learn about the protocol.
+Use it to download bitorrent contents like you could use wget to download any
+file form a http or ftp server, but from this P2P network.
+
+Only supports one torrent at a time, and no support for fancy features is
+implemented. You can use a magnet link or a torrent file to start the download,
+and also supports for resume from disk state. By default, this client will seed
+the file until the ratio is 1:1, after that, it will close automatically. This,
+along with the limits of upload/download/connections and more, can be configured
+in command line or using the configuration file per user (~/.bget).
 

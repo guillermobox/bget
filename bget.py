@@ -1,123 +1,65 @@
 import getopt
-import math
-import os
-import random
-import struct
 import sys
-import time
-import threading
 
-import bencode
-import bittorrent
-import utils
+from torrent import Torrent
+from tracker import Tracker
+from swarm import Swarm
+from utils import configuration, generate_clientid
 
-def peer_thread(torrent, swarm, tid):
-    # This thread should connect to a peer, or answer to a peer connection,
-    # and provide with all the functionality needed to interact with it.
-    # The PeerConnection object will help implementing the communication
-    # protocol.
-    #
-    # The thread has to mantain connections with available peers, or wait
-    # until more peers are available. Also, it has to request pieces to
-    # the connected peer, save the piece and keep requesting free pieces
-    # from the torrent file until the end.
-    #
-    # Also, the multiple causes of failure for the thread has to be
-    # dealt with, updating the swarm.
 
-    def newpeer():
-        while True:
-            peer = swarm.get_peer()
-            pc = bittorrent.PeerConnection(torrent, peer)
-            print '{0:4} Connecting with peer {1}:{2}'.format(tid, peer[0], peer[1])
-            try:
-                pc.connect()
-            except bittorrent.DropConnection:
-                continue
-            break
-        return pc
-
-    pc = newpeer()
-
-    while True:
-        try:
-            if pc.state == 'connected':
-                if pc.me_interested == 0:
-                    pc.send_interested()
-
-            elif pc.state == 'ready':
-                piece = pc.reserve_piece()
-                if piece != None:
-                    pc.request_piece()
-
-            elif pc.state == 'downloading':
-                if pc.has_piece():
-                    if pc.submit_piece() == False:
-                        pc.restart_piece()
-                    else:
-                        if pc.reserve_piece():
-                            pc.request_piece()
-
-            message = pc.receive()
-            if utils.config['verbose']:
-                print '{0:4} [{1}] {2}'.format(tid, pc.state, bittorrent.msgtostr(*message))
-        except bittorrent.DropConnection:
-            if utils.config['verbose']:
-                print '{0:4} Dropped connection!'.format(tid)
-            pc.free_piece()
-            pc = newpeer()
-
-# Update status of the download on the screen. Called every 1 second by main().
-def update_status(torrent, swarm):
-    if utils.config['verbose'] != True:
-        print '\rDownloaded: %d/%d KiB @ %.2f KiB/s Swarm: %d'%(torrent.downloaded_bytes/1024, torrent.size/1024, torrent.rate, swarm.size()),
-        sys.stdout.flush()
+def usage():
+    print 'Usage: bget [-i|--info] [-v|--verbose] [-t|--threads <numthreads>] <torrentpath|magnetlink>'
+    print
+    print 'Download the torrent defined by the path or magnet link.'
+    print
+    print '      -i,--info   Extract and print the information about the torrent.'
+    print '   -v,--verbose   Show the protocol messages.'
+    print '   -t,--threads   Use a maximum of <numthreads> threads to connect to peers. Has to be an int.'
+    print
+    exit(1)
 
 def main():
 
     options, files = getopt.getopt(sys.argv[1:], 'ivt:', ['info', 'verbose', 'threads:'])
 
-    if len(files) < 1:
-        print 'Usage: bget [-i|--info] [-v|--verbose] [-t|--threads <numthreads>] <torrentpath>'
-        exit(1)
-
     for flag, value in options:
         if flag == '-v' or flag == '--verbose':
-            utils.config['verbose'] = True
+            configuration['verbose'] = True
         elif flag == '-t' or flag == '--threads':
-            utils.config['threads'] = int(value)
+            try:
+                configuration['threads'] = int(value)
+            except:
+                usage()
         elif flag == '-i' or flag == '--info':
-            utils.config['info'] = True
+            configuration['info'] = True
+        else:
+            usage()
 
-    torrent = bittorrent.Torrent(files[0])
-    torrent.show()
+    if len(files) != 1:
+        usage()
 
-    if utils.config['info'] == True:
+    try:
+        torrent = Torrent(files[0])
+    except:
+        print 'Impossible to read torrent file/magnet link:', files[0]
+        exit(1)
+
+    if configuration['info'] == True:
+        torrent.show()
         exit(0)
 
     torrent.start()
 
-    utils.generate_clientid()
+    generate_clientid()
 
-    tracker = bittorrent.Tracker(torrent.data['announce'])
+    tracker = Tracker(torrent.data['announce'])
     tracker.update(torrent)
 
-    swarm = bittorrent.Swarm()
+    swarm = Swarm()
     swarm.update_peers(tracker)
 
-    threads = utils.config['threads']
-    thread_list = []
-
-    for i in range(threads):
-        th = threading.Thread(target=peer_thread, args=(torrent, swarm, i))
-        thread_list.append(th)
-        th.start()
-
-    while True:
-        update_status(torrent, swarm)
-        time.sleep(10)
-        if tracker.update(torrent):
-            update_peers(tracker)
+    threads = configuration['threads']
 
 if __name__=='__main__':
     main()
+
